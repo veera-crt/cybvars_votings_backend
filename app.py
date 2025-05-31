@@ -465,7 +465,7 @@ def login():
     cur = None
     if request.method == 'OPTIONS':
         response = jsonify({'success': True})
-        response.headers.add('Access-Control-Allow-Origin', 'http://127.0.0.1:5500')
+        response.headers.add('Access-Control-Allow-Origin', 'https://veera-crt.github.io')
         response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
         response.headers.add('Access-Control-Allow-Methods', 'POST')
         response.headers.add('Access-Control-Allow-Credentials', 'true')
