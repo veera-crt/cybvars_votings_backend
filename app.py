@@ -102,29 +102,29 @@ def send_manager_email(to_email, approved=True):
         server.send_message(msg)
 
 # --- API ROUTES ---
+
 @app.route('/api/register', methods=['POST'])
 def register():
-    data = request.form
-    required = ['full_name', 'email', 'phone', 'dob', 'gender', 'voter_id', 'address', 'password', 'confirm_password']
-    if not all(k in data and data[k] for k in required):
-        return jsonify({'success': False, 'message': 'Missing fields'}), 400
-    if data['password'] != data['confirm_password']:
-        return jsonify({'success': False, 'message': 'Passwords do not match'}), 400
-
-    hashed_pw = generate_password_hash(data['password'])
-    enc_address = aes_encrypt(data['address'])
-    enc_phone = aes_encrypt(data['phone'])
-    email = data['email']
-    voter_id = data['voter_id']
-    otp = str(random.randint(100000, 999999))
-    otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
-    cur = conn.cursor()
+    cur = None
     try:
-        # 1. Check users table
+        data = request.form
+        required = ['full_name', 'email', 'phone', 'dob', 'gender', 'voter_id', 'address', 'password', 'confirm_password']
+        if not all(k in data and data[k] for k in required):
+            return jsonify({'success': False, 'message': 'Missing fields'}), 400
+        if data['password'] != data['confirm_password']:
+            return jsonify({'success': False, 'message': 'Passwords do not match'}), 400
+
+        hashed_pw = generate_password_hash(data['password'])
+        enc_address = aes_encrypt(data['address'])
+        enc_phone = aes_encrypt(data['phone'])
+        email = data['email']
+        voter_id = data['voter_id']
+        otp = str(random.randint(100000, 999999))
+        otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        cur = conn.cursor()
         cur.execute("SELECT id FROM users WHERE email=%s OR voter_id=%s", (email, voter_id))
         if cur.fetchone():
             return jsonify({'success': False, 'message': 'Email or Voter ID already exists.'}), 409
-        # 2. Check pending_registrations
         cur.execute("SELECT id, otp_verified FROM pending_registrations WHERE email=%s OR voter_id=%s", (email, voter_id))
         pending = cur.fetchone()
         if pending:
@@ -134,7 +134,6 @@ def register():
                 return jsonify({'show_otp_card': True, 'email': email, 'message': 'OTP verification pending. Check your email for OTP.'})
             else:
                 return jsonify({'success': False, 'message': 'Your registration is under review. Please wait for approval.'}), 409
-        # 3. Add to pending_registrations
         cur.execute("""
             INSERT INTO pending_registrations 
             (full_name, email, phone, dob, gender, voter_id, address, password, otp_code, otp_expires_at)
@@ -153,15 +152,17 @@ def register():
         print('Registration error:', e)
         return jsonify({'success': False, 'message': 'Registration failed.'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/verify-otp', methods=['POST'])
 def verify_otp():
-    data = request.form
-    email = data.get('email')
-    otp = data.get('otp')
-    cur = conn.cursor()
+    cur = None
     try:
+        data = request.form
+        email = data.get('email')
+        otp = data.get('otp')
+        cur = conn.cursor()
         cur.execute("""
             SELECT id, otp_code, otp_expires_at, otp_verified FROM pending_registrations
             WHERE email=%s
@@ -186,13 +187,15 @@ def verify_otp():
         print('OTP verification error:', e)
         return jsonify({'success': False, 'message': 'OTP verification failed.'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/resend-otp', methods=['POST'])
 def resend_otp():
-    email = request.form.get("email")
-    cur = conn.cursor()
+    cur = None
     try:
+        email = request.form.get("email")
+        cur = conn.cursor()
         cur.execute("SELECT id FROM pending_registrations WHERE email=%s", (email,))
         row = cur.fetchone()
         if not row:
@@ -209,12 +212,14 @@ def resend_otp():
         print('Resend OTP error:', e)
         return jsonify({'success': False, 'message': 'Failed to resend OTP.'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/manager/pending-users', methods=['GET'])
 def pending_users():
-    cur = conn.cursor()
+    cur = None
     try:
+        cur = conn.cursor()
         cur.execute("""
             SELECT id, full_name, email, phone, dob, gender, voter_id, address 
             FROM pending_registrations
@@ -238,14 +243,16 @@ def pending_users():
         print("Error fetching pending users:", e)
         return jsonify({'success': False, 'message': 'Error fetching users.'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/manager/approve-user', methods=['POST'])
 def approve_user():
-    data = request.get_json()
-    pending_id = data.get('user_id')
-    cur = conn.cursor()
+    cur = None
     try:
+        data = request.get_json()
+        pending_id = data.get('user_id')
+        cur = conn.cursor()
         cur.execute("SELECT * FROM pending_registrations WHERE id=%s", (pending_id,))
         user = cur.fetchone()
         if not user:
@@ -262,14 +269,16 @@ def approve_user():
         print("Error approving user:", e)
         return jsonify({'success': False, 'message': 'Error approving user.'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/manager/reject-user', methods=['POST'])
 def reject_user():
-    data = request.get_json()
-    pending_id = data.get('user_id')
-    cur = conn.cursor()
+    cur = None
     try:
+        data = request.get_json()
+        pending_id = data.get('user_id')
+        cur = conn.cursor()
         cur.execute("SELECT email FROM pending_registrations WHERE id=%s", (pending_id,))
         row = cur.fetchone()
         if not row:
@@ -283,45 +292,55 @@ def reject_user():
         print("Error rejecting user:", e)
         return jsonify({'success': False, 'message': 'Error rejecting user.'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 def get_candidates(election_id):
-    cur = conn.cursor()
-    cur.execute("SELECT id, name, symbol, party, votes FROM candidates WHERE election_id=%s", (election_id,))
-    cands = [{"id": c[0], "name": c[1], "symbol": c[2], "party": c[3], "votes": c[4]} for c in cur.fetchall()]
-    cur.close()
-    return cands
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, symbol, party, votes FROM candidates WHERE election_id=%s", (election_id,))
+        cands = [{"id": c[0], "name": c[1], "symbol": c[2], "party": c[3], "votes": c[4]} for c in cur.fetchall()]
+        return cands
+    finally:
+        if cur:
+            cur.close()
 
 @app.route('/api/elections', methods=['GET'])
 def get_elections():
-    cur = conn.cursor()
-    cur.execute("SELECT id, title, description, start_time, end_time, is_locked, is_active, is_hidden FROM elections ORDER BY id DESC")
-    rows = cur.fetchall()
-    elections = []
-    for r in rows:
-        elections.append({
-            "id": r[0],
-            "title": r[1],
-            "description": r[2],
-            "start_time": r[3].isoformat() if r[3] else "",
-            "end_time": r[4].isoformat() if r[4] else "",
-            "is_locked": r[5],
-            "is_active": r[6],
-            "is_hidden": r[7],
-            "candidates": get_candidates(r[0])
-        })
-    cur.close()
-    return jsonify({"success": True, "elections": elections})
+    cur = None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT id, title, description, start_time, end_time, is_locked, is_active, is_hidden FROM elections ORDER BY id DESC")
+        rows = cur.fetchall()
+        elections = []
+        for r in rows:
+            elections.append({
+                "id": r[0],
+                "title": r[1],
+                "description": r[2],
+                "start_time": r[3].isoformat() if r[3] else "",
+                "end_time": r[4].isoformat() if r[4] else "",
+                "is_locked": r[5],
+                "is_active": r[6],
+                "is_hidden": r[7],
+                "candidates": get_candidates(r[0])
+            })
+        return jsonify({"success": True, "elections": elections})
+    finally:
+        if cur:
+            cur.close()
 
 @app.route('/api/elections', methods=['POST'])
 def create_election():
-    data = request.get_json()
-    title = data.get("title")
-    desc = data.get("description", "")
-    start_time = data.get("start_time")
-    end_time = data.get("end_time")
-    cur = conn.cursor()
+    cur = None
     try:
+        data = request.get_json()
+        title = data.get("title")
+        desc = data.get("description", "")
+        start_time = data.get("start_time")
+        end_time = data.get("end_time")
+        cur = conn.cursor()
         cur.execute(
             "INSERT INTO elections (title, description, start_time, end_time) VALUES (%s, %s, %s, %s)",
             (title, desc, start_time, end_time)
@@ -333,16 +352,18 @@ def create_election():
         return jsonify({"success": False, "message": "Could not create election."}), 500
     finally:
         conn.commit()
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/candidates', methods=['POST'])
 def add_candidate(election_id):
-    data = request.get_json()
-    name = data.get("name")
-    symbol = data.get("symbol", "")
-    party = data.get("party", "")
-    cur = conn.cursor()
+    cur = None
     try:
+        data = request.get_json()
+        name = data.get("name")
+        symbol = data.get("symbol", "")
+        party = data.get("party", "")
+        cur = conn.cursor()
         cur.execute(
             "INSERT INTO candidates (election_id, name, symbol, party) VALUES (%s, %s, %s, %s)",
             (election_id, name, symbol, party)
@@ -354,14 +375,16 @@ def add_candidate(election_id):
         return jsonify({"success": False, "message": "Could not add candidate."}), 500
     finally:
         conn.commit()
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/lock', methods=['POST'])
 def lock_election(election_id):
-    data = request.get_json()
-    lock = data.get("lock", True)
-    cur = conn.cursor()
+    cur = None
     try:
+        data = request.get_json()
+        lock = data.get("lock", True)
+        cur = conn.cursor()
         cur.execute(
             "UPDATE elections SET is_locked=%s WHERE id=%s",
             (lock, election_id)
@@ -373,14 +396,16 @@ def lock_election(election_id):
         return jsonify({"success": False, "message": "Could not update lock state."}), 500
     finally:
         conn.commit()
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/activate', methods=['POST'])
 def activate_election(election_id):
-    data = request.get_json()
-    active = data.get("active", True)
-    cur = conn.cursor()
+    cur = None
     try:
+        data = request.get_json()
+        active = data.get("active", True)
+        cur = conn.cursor()
         cur.execute(
             "UPDATE elections SET is_active=%s WHERE id=%s",
             (active, election_id)
@@ -392,12 +417,14 @@ def activate_election(election_id):
         return jsonify({"success": False, "message": "Could not update active state."}), 500
     finally:
         conn.commit()
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/reset', methods=['POST'])
 def reset_election(election_id):
-    cur = conn.cursor()
+    cur = None
     try:
+        cur = conn.cursor()
         cur.execute("DELETE FROM candidates WHERE election_id=%s", (election_id,))
         return jsonify({"success": True})
     except Exception as e:
@@ -406,15 +433,17 @@ def reset_election(election_id):
         return jsonify({"success": False, "message": "Could not reset election."}), 500
     finally:
         conn.commit()
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/modify', methods=['POST'])
 def modify_election(election_id):
-    data = request.get_json()
-    start_time = data.get("start_time")
-    end_time = data.get("end_time")
-    cur = conn.cursor()
+    cur = None
     try:
+        data = request.get_json()
+        start_time = data.get("start_time")
+        end_time = data.get("end_time")
+        cur = conn.cursor()
         cur.execute(
             "UPDATE elections SET start_time=%s, end_time=%s WHERE id=%s",
             (start_time, end_time, election_id)
@@ -426,10 +455,12 @@ def modify_election(election_id):
         return jsonify({"success": False, "message": "Could not modify election time."}), 500
     finally:
         conn.commit()
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
+    cur = None
     if request.method == 'OPTIONS':
         response = jsonify({'success': True})
         response.headers.add('Access-Control-Allow-Origin', 'http://127.0.0.1:5500')
@@ -437,13 +468,13 @@ def login():
         response.headers.add('Access-Control-Allow-Methods', 'POST')
         response.headers.add('Access-Control-Allow-Credentials', 'true')
         return response
-    data = request.get_json()
-    email = data.get('email')
-    password = data.get('password')
-    if not email or not password:
-        return jsonify({'success': False, 'message': 'Email and password required.'}), 400
-    cur = conn.cursor()
     try:
+        data = request.get_json()
+        email = data.get('email')
+        password = data.get('password')
+        if not email or not password:
+            return jsonify({'success': False, 'message': 'Email and password required.'}), 400
+        cur = conn.cursor()
         cur.execute("SELECT id, password_hash, registration_status FROM users WHERE email=%s", (email,))
         user = cur.fetchone()
         if not user:
@@ -465,10 +496,12 @@ def login():
         print("Login error:", e)
         return jsonify({'success': False, 'message': 'Login failed.'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/user/elections', methods=['GET'])
 def get_user_elections():
+    cur = None
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -497,29 +530,37 @@ def get_user_elections():
                 "user_voted_for": e[7],
                 "candidates": []
             }
-            cur.execute("""
-                SELECT id, name, symbol, party, votes 
-                FROM candidates 
-                WHERE election_id=%s
-            """, (e[0],))
-            for c in cur.fetchall():
-                election["candidates"].append({
-                    "id": c[0],
-                    "name": c[1],
-                    "symbol": c[2],
-                    "party": c[3],
-                    "votes": c[4]
-                })
+            cur2 = None
+            try:
+                cur2 = conn.cursor()
+                cur2.execute("""
+                    SELECT id, name, symbol, party, votes 
+                    FROM candidates 
+                    WHERE election_id=%s
+                """, (e[0],))
+                for c in cur2.fetchall():
+                    election["candidates"].append({
+                        "id": c[0],
+                        "name": c[1],
+                        "symbol": c[2],
+                        "party": c[3],
+                        "votes": c[4]
+                    })
+            finally:
+                if cur2:
+                    cur2.close()
             elections.append(election)
         return jsonify({'success': True, 'elections': elections})
     except Exception as e:
         print("Error fetching elections:", e)
         return jsonify({'success': False, 'message': 'Error fetching elections'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/profile', methods=['GET'])
 def get_profile():
+    cur = None
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -545,10 +586,12 @@ def get_profile():
         print("Error fetching profile:", e)
         return jsonify({'success': False, 'message': 'Error fetching profile'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/vote', methods=['POST'])
 def submit_vote():
+    cur = None
     try:
         user_id = session.get('user_id')
         if not user_id:
@@ -581,10 +624,12 @@ def submit_vote():
         print("Error submitting vote:", e)
         return jsonify({'success': False, 'message': 'Error submitting vote'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/voting-stats', methods=['GET'])
 def get_voting_stats():
+    cur = None
     try:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM users WHERE registration_status='approved'")
@@ -600,14 +645,16 @@ def get_voting_stats():
         print("Error fetching voting stats:", e)
         return jsonify({'success': False, 'message': 'Error fetching stats'}), 500
     finally:
-        cur.close()
+        if cur:
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/hide', methods=['POST'])
 def hide_election(election_id):
-    data = request.get_json()
-    hide = data.get("hide", True)
-    cur = conn.cursor()
+    cur = None
     try:
+        data = request.get_json()
+        hide = data.get("hide", True)
+        cur = conn.cursor()
         cur.execute(
             "UPDATE elections SET is_hidden=%s WHERE id=%s",
             (hide, election_id)
@@ -619,7 +666,13 @@ def hide_election(election_id):
         return jsonify({"success": False, "message": "Could not update hide state."}), 500
     finally:
         conn.commit()
-        cur.close()
+        if cur:
+            cur.close()
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    session.clear()
+    return jsonify({'success': True, 'message': 'Logged out.'})
 
 if __name__ == '__main__':
     app.run(debug=True)
