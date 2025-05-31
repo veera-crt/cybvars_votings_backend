@@ -23,7 +23,7 @@ app.config['SESSION_COOKIE_SECURE'] = True
 
 CORS(app, supports_credentials=True, resources={
     r"/api/*": {
-        "origins": ["http://127.0.0.1:5500", "http://localhost:5500"],  # Change for production!
+        "origins": ["http://127.0.0.1:5500", "https://veera-crt.github.io", "http://localhost:5500"],  # Change for production!
         "methods": ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
         "allow_headers": ["Content-Type"],
         "supports_credentials": True
