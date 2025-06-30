@@ -46,6 +46,7 @@ AES_KEY = os.environ.get("AES_KEY")[:32].encode()
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
 DATABASE_URL = os.environ.get("DATABASE_URL")
+
 # Database Connection with schema setting
 def get_db_connection():
     try:
@@ -118,7 +119,7 @@ def send_email(to_email, subject, content):
     except Exception as e:
         logger.error(f"Email failed: {e}\nUsername: {EMAIL_USER}\nPassword: {'*'*len(EMAIL_PASS)}")
         return False
-    
+
 def test_db_connection():
     try:
         conn = get_db_connection()
@@ -213,11 +214,11 @@ def health_check():
     finally:
         if 'conn' in locals():
             conn.close()
-            
+
 @app.before_request
 def check_auth():
     # Skip auth check for these endpoints
-    if request.endpoint in ['login', 'logout', 'health_check', 'forgot_password', 'verify_reset_otp', 'reset_password']:
+    if request.endpoint in ['login', 'logout', 'health_check', 'forgot_password', 'verify_reset_otp', 'reset_password', 'register', 'verify_otp', 'resend_otp']:
         return
         
     if request.path.startswith('/api/') and not session.get('user_id'):
@@ -596,7 +597,122 @@ def reject_user():
         if 'conn' in locals():
             conn.close()
 
+@app.route('/api/elections', methods=['GET'])
+def get_elections():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
 
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, title, description, start_time, end_time, is_locked, is_active, is_hidden 
+                FROM elections 
+                ORDER BY id DESC
+                """
+            )
+            
+            elections = []
+            for e in cur.fetchall():
+                elections.append({
+                    "id": e[0],
+                    "title": e[1],
+                    "description": e[2],
+                    "start_time": e[3].isoformat() if e[3] else "",
+                    "end_time": e[4].isoformat() if e[4] else "",
+                    "is_locked": e[5],
+                    "is_active": e[6],
+                    "is_hidden": e[7],
+                    "candidates": get_candidates(e[0])
+                })
+                
+            return jsonify({"success": True, "elections": elections})
+            
+    except Exception as e:
+        logger.error(f"Error fetching elections: {e}")
+        return jsonify({
+            "success": False, 
+            "message": "Error fetching elections"
+        }), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/api/user/elections', methods=['GET'])
+def get_user_elections():
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
+        
+    try:
+        user_id = session.get('user_id')
+        if not user_id:
+            return jsonify({
+                'success': False, 
+                'message': 'Not authenticated'
+            }), 401
+            
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT e.id, e.title, e.description, e.start_time, e.end_time, 
+                       e.is_locked, e.is_active,
+                       (SELECT candidate_id FROM votes 
+                        WHERE voter_id=(SELECT voter_id FROM users WHERE id=%s) 
+                        AND election_id=e.id) as user_voted_for
+                FROM elections e
+                WHERE e.is_hidden = FALSE
+                ORDER BY e.id DESC
+                """,
+                (user_id,)
+            )
+            
+            elections = []
+            for e in cur.fetchall():
+                election = {
+                    "id": e[0],
+                    "title": e[1],
+                    "description": e[2],
+                    "start_time": e[3].isoformat() if e[3] else "",
+                    "end_time": e[4].isoformat() if e[4] else "",
+                    "is_locked": e[5],
+                    "is_active": e[6],
+                    "user_voted_for": e[7],
+                    "candidates": []
+                }
+                
+                cur.execute(
+                    """
+                    SELECT id, name, symbol, party, votes 
+                    FROM candidates 
+                    WHERE election_id=%s
+                    """,
+                    (e[0],)
+                )
+                
+                for c in cur.fetchall():
+                    election["candidates"].append({
+                        "id": c[0],
+                        "name": c[1],
+                        "symbol": c[2],
+                        "party": c[3],
+                        "votes": c[4]
+                    })
+                    
+                elections.append(election)
+                
+            return jsonify({'success': True, 'elections': elections})
+            
+    except Exception as e:
+        logger.error(f"Error fetching elections: {e}")
+        return jsonify({
+            'success': False, 
+            'message': 'Error fetching elections'
+        }), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
 
 @app.route('/api/elections', methods=['POST'])
 def create_election():
@@ -773,6 +889,33 @@ def modify_election(election_id):
         return jsonify({
             "success": False, 
             "message": "Could not modify election time"
+        }), 500
+    finally:
+        if 'conn' in locals():
+            conn.close()
+
+@app.route('/api/elections/<int:election_id>/hide', methods=['POST'])
+def hide_election(election_id):
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
+        
+    try:
+        data = request.get_json()
+        hide = data.get("hide", True)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE elections SET is_hidden=%s WHERE id=%s",
+                (hide, election_id)
+            )
+            return jsonify({"success": True})
+            
+    except Exception as e:
+        logger.error(f"Hide/unhide error: {e}")
+        return jsonify({
+            "success": False, 
+            "message": "Could not update hide state"
         }), 500
     finally:
         if 'conn' in locals():
@@ -1028,81 +1171,6 @@ def reset_password():
         if 'conn' in locals():
             conn.close()
 
-@app.route('/api/user/elections', methods=['GET'])
-def get_user_elections():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-        
-    try:
-        user_id = session.get('user_id')
-        if not user_id:
-            return jsonify({
-                'success': False, 
-                'message': 'Not authenticated'
-            }), 401
-            
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT e.id, e.title, e.description, e.start_time, e.end_time, 
-                       e.is_locked, e.is_active,
-                       (SELECT candidate_id FROM votes 
-                        WHERE voter_id=(SELECT voter_id FROM users WHERE id=%s) 
-                        AND election_id=e.id) as user_voted_for
-                FROM elections e
-                WHERE e.is_hidden = FALSE
-                ORDER BY e.id DESC
-                """,
-                (user_id,)
-            )
-            
-            elections = []
-            for e in cur.fetchall():
-                election = {
-                    "id": e[0],
-                    "title": e[1],
-                    "description": e[2],
-                    "start_time": e[3].isoformat() if e[3] else "",
-                    "end_time": e[4].isoformat() if e[4] else "",
-                    "is_locked": e[5],
-                    "is_active": e[6],
-                    "user_voted_for": e[7],
-                    "candidates": []
-                }
-                
-                cur.execute(
-                    """
-                    SELECT id, name, symbol, party, votes 
-                    FROM candidates 
-                    WHERE election_id=%s
-                    """,
-                    (e[0],)
-                )
-                
-                for c in cur.fetchall():
-                    election["candidates"].append({
-                        "id": c[0],
-                        "name": c[1],
-                        "symbol": c[2],
-                        "party": c[3],
-                        "votes": c[4]
-                    })
-                    
-                elections.append(election)
-                
-            return jsonify({'success': True, 'elections': elections})
-            
-    except Exception as e:
-        logger.error(f"Error fetching elections: {e}")
-        return jsonify({
-            'success': False, 
-            'message': 'Error fetching elections'
-        }), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
 @app.route('/api/profile', methods=['GET'])
 def get_profile():
     conn = get_db_connection()
@@ -1254,33 +1322,6 @@ def get_voting_stats():
         return jsonify({
             'success': False, 
             'message': 'Error fetching stats'
-        }), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-@app.route('/api/elections/<int:election_id>/hide', methods=['POST'])
-def hide_election(election_id):
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-        
-    try:
-        data = request.get_json()
-        hide = data.get("hide", True)
-
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE elections SET is_hidden=%s WHERE id=%s",
-                (hide, election_id)
-            )
-            return jsonify({"success": True})
-            
-    except Exception as e:
-        logger.error(f"Hide/unhide error: {e}")
-        return jsonify({
-            "success": False, 
-            "message": "Could not update hide state"
         }), 500
     finally:
         if 'conn' in locals():
