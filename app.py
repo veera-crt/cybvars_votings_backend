@@ -596,51 +596,7 @@ def reject_user():
         if 'conn' in locals():
             conn.close()
 
-@app.route('/api/user/elections', methods=['GET'])
-def get_user_elections():
-    if not session.get('user_id'):
-        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
-        
-    # Rest of your function...
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
 
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, title, description, start_time, end_time, is_locked, is_active, is_hidden 
-                FROM elections 
-                ORDER BY id DESC
-                """
-            )
-            
-            elections = []
-            for e in cur.fetchall():
-                elections.append({
-                    "id": e[0],
-                    "title": e[1],
-                    "description": e[2],
-                    "start_time": e[3].isoformat() if e[3] else "",
-                    "end_time": e[4].isoformat() if e[4] else "",
-                    "is_locked": e[5],
-                    "is_active": e[6],
-                    "is_hidden": e[7],
-                    "candidates": get_candidates(e[0])
-                })
-                
-            return jsonify({"success": True, "elections": elections})
-            
-    except Exception as e:
-        logger.error(f"Error fetching elections: {e}")
-        return jsonify({
-            "success": False, 
-            "message": "Error fetching elections"
-        }), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
 
 @app.route('/api/elections', methods=['POST'])
 def create_election():
