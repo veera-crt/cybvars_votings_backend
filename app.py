@@ -213,6 +213,15 @@ def health_check():
     finally:
         if 'conn' in locals():
             conn.close()
+            
+@app.before_request
+def check_auth():
+    # Skip auth check for these endpoints
+    if request.endpoint in ['login', 'logout', 'health_check', 'forgot_password', 'verify_reset_otp', 'reset_password']:
+        return
+        
+    if request.path.startswith('/api/') and not session.get('user_id'):
+        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
 
 @app.route('/api/register', methods=['POST'])
 def register():
@@ -587,8 +596,12 @@ def reject_user():
         if 'conn' in locals():
             conn.close()
 
-@app.route('/api/elections', methods=['GET'])
-def get_elections():
+@app.route('/api/user/elections', methods=['GET'])
+def get_user_elections():
+    if not session.get('user_id'):
+        return jsonify({'success': False, 'message': 'Not authenticated'}), 401
+        
+    # Rest of your function...
     conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
