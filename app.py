@@ -796,21 +796,25 @@ def modify_election(election_id):
 
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
+    allowed_origins = ['http://127.0.0.1:5500', 'https://veera-crt.github.io']
+    origin = request.headers.get('Origin')
+
     if request.method == 'OPTIONS':
         response = jsonify({'success': True})
-        response.headers.add('Access-Control-Allow-Origin', 'http://127.0.0.1:5500')
-        response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
-        response.headers.add('Access-Control-Allow-Methods', 'POST')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        if origin in allowed_origins:
+            response.headers.add('Access-Control-Allow-Origin', origin)
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type')
+            response.headers.add('Access-Control-Allow-Methods', 'POST')
+            response.headers.add('Access-Control-Allow-Credentials', 'true')
         return response
-        
+
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-        
+
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
-    
+
     if not email or not password:
         return jsonify({'success': False, 'message': 'Email and password required'}), 400
 
@@ -825,33 +829,34 @@ def login():
             (email,)
         )
         user = cur.fetchone()
-        
+
         if not user:
             return jsonify({
                 'success': False, 
                 'message': 'No account found with this email'
             }), 401
-            
+
         if user[2] != 'approved':
             return jsonify({
                 'success': False, 
                 'message': 'Your registration is not approved yet'
             }), 403
-            
+
         if not check_password_hash(user[1], password):
             return jsonify({
                 'success': False, 
                 'message': 'Incorrect password'
             }), 401
-            
+
         session['user_id'] = user[0]
         response = jsonify({
             'success': True, 
             'message': 'Login successful!',
             'user_id': user[0]
         })
-        response.headers.add('Access-Control-Allow-Origin', 'http://127.0.0.1:5500')
-        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        if origin in allowed_origins:
+            response.headers.add('Access-Control-Allow-Origin', origin)
+            response.headers.add('Access-Control-Allow-Credentials', 'true')
         return response
     except Exception as e:
         logger.error(f"Login error: {e}")
