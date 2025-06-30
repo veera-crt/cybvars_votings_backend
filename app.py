@@ -26,13 +26,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # CORS Configuration
+
+
 CORS(app, supports_credentials=True, resources={
     r"/api/*": {
         "origins": [
             "http://127.0.0.1:5500", 
             "http://localhost:5500",
             "http://127.0.0.1:5000",
-            "http://localhost:5000"
+            "http://localhost:5000",
+            "https://veera-crt.github.io"
         ],
         "methods": ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
         "allow_headers": ["Content-Type"],
