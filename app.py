@@ -45,8 +45,7 @@ CORS(app, supports_credentials=True, resources={
 AES_KEY = os.environ.get("AES_KEY")[:32].encode()
 EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
-DATABASE_URL = "postgresql://neondb_owner:npg_Cq4srGobzv5y@ep-solitary-cloud-a1ogk8kq-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
-
+DATABASE_URL = os.environ.get("DATABASE_URL")
 # Database Connection with schema setting
 def get_db_connection():
     try:
