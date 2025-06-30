@@ -28,13 +28,16 @@ logger = logging.getLogger(__name__)
 
 # CORS Configuration
 # In your Flask app initialization
+
+
 CORS(app, supports_credentials=True, resources={
     r"/api/*": {
         "origins": [
-            "http://127.0.0.1:5500", 
+            "http://127.0.0.1:5500",
             "http://localhost:5500",
             "http://127.0.0.1:5000",
-            "http://localhost:5000"
+            "http://localhost:5000",
+            "https://veera-crt.github.io"
         ],
         "methods": ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
         "allow_headers": ["Content-Type"],
@@ -42,6 +45,7 @@ CORS(app, supports_credentials=True, resources={
         "expose_headers": ["Content-Type"]
     }
 })
+
 
 # Constants
 AES_KEY = os.environ.get("AES_KEY")[:32].encode()
