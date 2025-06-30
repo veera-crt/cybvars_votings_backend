@@ -1,3 +1,4 @@
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -26,16 +27,14 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # CORS Configuration
-
-
+# In your Flask app initialization
 CORS(app, supports_credentials=True, resources={
     r"/api/*": {
         "origins": [
             "http://127.0.0.1:5500", 
             "http://localhost:5500",
             "http://127.0.0.1:5000",
-            "http://localhost:5000",
-            "https://veera-crt.github.io"
+            "http://localhost:5000"
         ],
         "methods": ["GET", "POST", "OPTIONS", "PUT", "DELETE"],
         "allow_headers": ["Content-Type"],
@@ -50,20 +49,19 @@ EMAIL_USER = os.environ.get("EMAIL_USER")
 EMAIL_PASS = os.environ.get("EMAIL_PASS")
 DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# Database Connection with schema setting
+# Database Connection
 def get_db_connection():
     try:
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = True
-        
-        # Set the schema to 'voting'
-        with conn.cursor() as cur:
-            cur.execute("SET search_path TO voting")
-            
         return conn
     except Exception as e:
         logger.error(f"Database connection error: {e}")
         return None
+
+conn = get_db_connection()
+cur = conn.cursor()
+cur.execute("SET search_path TO public;")
 
 # Security Utilities
 def aes_encrypt(plain_text):
@@ -99,6 +97,7 @@ def aes_decrypt(enc_b64):
         return None
 
 # Email Services
+# Updated email function with better debugging
 def send_email(to_email, subject, content):
     try:
         msg = EmailMessage()
@@ -122,22 +121,15 @@ def send_email(to_email, subject, content):
     except Exception as e:
         logger.error(f"Email failed: {e}\nUsername: {EMAIL_USER}\nPassword: {'*'*len(EMAIL_PASS)}")
         return False
-
+    
 def test_db_connection():
     try:
-        conn = get_db_connection()
-        if conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-            print("Database connection successful")
-        else:
-            print("Database connection failed")
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        print("Database connection successful")
     except Exception as e:
         print(f"Database connection failed: {e}")
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
 def send_otp_email(to_email, otp):
     content = f"Your CybVars Voting OTP is: {otp}"
     return send_email(to_email, 'CybVars Voting - Email Verification OTP', content)
@@ -156,42 +148,36 @@ def send_manager_email(to_email, approved=True):
 # Helper Functions
 def get_candidates(election_id):
     try:
-        conn = get_db_connection()
-        if not conn:
-            return []
-            
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, symbol, party, votes FROM candidates WHERE election_id=%s",
-                (election_id,)
-            )
-            candidates = []
-            for c in cur.fetchall():
-                candidates.append({
-                    "id": c[0],
-                    "name": c[1],
-                    "symbol": c[2],
-                    "party": c[3],
-                    "votes": c[4]
-                })
-            return candidates
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, name, symbol, party, votes FROM candidates WHERE election_id=%s",
+            (election_id,)
+        )
+        candidates = []
+        for c in cur.fetchall():
+            candidates.append({
+                "id": c[0],
+                "name": c[1],
+                "symbol": c[2],
+                "party": c[3],
+                "votes": c[4]
+            })
+        return candidates
     except Exception as e:
         logger.error(f"Error getting candidates: {e}")
         return []
     finally:
-        if 'conn' in locals():
-            conn.close()
+        cur.close()
 
 # API Routes
 @app.route('/api/health', methods=['GET'])
 def health_check():
     try:
-        conn = get_db_connection()
-        if not conn:
+        if not conn or conn.closed:
             raise Exception("Database connection not established")
         
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1")
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
         
         email_ok = True
         try:
@@ -214,39 +200,26 @@ def health_check():
             'error': str(e),
             'status': 'unhealthy'
         }), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-@app.before_request
-def check_auth():
-    # Skip auth check for these endpoints
-    if request.endpoint in ['login', 'logout', 'health_check', 'forgot_password', 'verify_reset_otp', 'reset_password', 'register', 'verify_otp', 'resend_otp']:
-        return
-        
-    if request.path.startswith('/api/') and not session.get('user_id'):
-        return jsonify({'success': False, 'message': 'Unauthorized'}), 401
 
 @app.route('/api/register', methods=['POST'])
 def register():
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json() if request.is_json else request.form
-        required_fields = [
-            'full_name', 'email', 'phone', 'dob', 
-            'gender', 'voter_id', 'address', 
-            'password', 'confirm_password'
-        ]
+    data = request.get_json() if request.is_json else request.form
+    required_fields = [
+        'full_name', 'email', 'phone', 'dob', 
+        'gender', 'voter_id', 'address', 
+        'password', 'confirm_password'
+    ]
+    
+    if not all(field in data for field in required_fields):
+        return jsonify({'success': False, 'message': 'Missing required fields'}), 400
         
-        if not all(field in data for field in required_fields):
-            return jsonify({'success': False, 'message': 'Missing required fields'}), 400
-            
-        if data['password'] != data['confirm_password']:
-            return jsonify({'success': False, 'message': 'Passwords do not match'}), 400
+    if data['password'] != data['confirm_password']:
+        return jsonify({'success': False, 'message': 'Passwords do not match'}), 400
 
+    try:
         hashed_pw = generate_password_hash(data['password'])
         enc_address = aes_encrypt(data['address'])
         enc_phone = aes_encrypt(data['phone'])
@@ -255,230 +228,232 @@ def register():
         otp = str(random.randint(100000, 999999))
         otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
         
-        with conn.cursor() as cur:
-            # Check existing users
-            cur.execute(
-                "SELECT id FROM users WHERE email=%s OR voter_id=%s", 
-                (email, voter_id)
-            )
-            if cur.fetchone():
-                return jsonify({'success': False, 'message': 'Email or Voter ID already exists'}), 409
-                
-            # Check pending registrations
-            cur.execute(
-                "SELECT id, otp_verified FROM pending_registrations WHERE email=%s OR voter_id=%s", 
-                (email, voter_id)
-            )
-            pending = cur.fetchone()
+        cur = conn.cursor()
+        
+        # Check existing users
+        cur.execute(
+            "SELECT id FROM users WHERE email=%s OR voter_id=%s", 
+            (email, voter_id)
+        )
+        if cur.fetchone():
+            return jsonify({'success': False, 'message': 'Email or Voter ID already exists'}), 409
             
-            if pending:
-                if not pending[1]:  # OTP not verified
-                    cur.execute(
-                        "UPDATE pending_registrations SET otp_code=%s, otp_expires_at=%s WHERE id=%s", 
-                        (otp, otp_expires_at, pending[0])
-                    )
-                    if not send_otp_email(email, otp):
-                        return jsonify({'success': False, 'message': 'Failed to send OTP'}), 500
-                    return jsonify({
-                        'success': True, 
-                        'show_otp_card': True, 
-                        'email': email, 
-                        'message': 'OTP verification pending'
-                    })
-                else:
-                    return jsonify({
-                        'success': False, 
-                        'message': 'Registration under review'
-                    }), 409
-                    
-            # New registration
-            cur.execute(
-                """
-                INSERT INTO pending_registrations 
-                (full_name, email, phone, dob, gender, voter_id, address, password, otp_code, otp_expires_at)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """,
-                (
-                    data['full_name'], email, enc_phone, data['dob'], 
-                    data['gender'], voter_id, enc_address, 
-                    hashed_pw, otp, otp_expires_at
+        # Check pending registrations
+        cur.execute(
+            "SELECT id, otp_verified FROM pending_registrations WHERE email=%s OR voter_id=%s", 
+            (email, voter_id)
+        )
+        pending = cur.fetchone()
+        
+        if pending:
+            if not pending[1]:  # OTP not verified
+                cur.execute(
+                    "UPDATE pending_registrations SET otp_code=%s, otp_expires_at=%s WHERE id=%s", 
+                    (otp, otp_expires_at, pending[0])
                 )
-            )
-            
-            if not send_otp_email(email, otp):
+                if not send_otp_email(email, otp):
+                    return jsonify({'success': False, 'message': 'Failed to send OTP'}), 500
+                return jsonify({
+                    'success': True, 
+                    'show_otp_card': True, 
+                    'email': email, 
+                    'message': 'OTP verification pending'
+                })
+            else:
                 return jsonify({
                     'success': False, 
-                    'message': 'Registration failed - email error'
-                }), 500
+                    'message': 'Registration under review'
+                }), 409
                 
+        # New registration
+        cur.execute(
+            """
+            INSERT INTO pending_registrations 
+            (full_name, email, phone, dob, gender, voter_id, address, password, otp_code, otp_expires_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (
+                data['full_name'], email, enc_phone, data['dob'], 
+                data['gender'], voter_id, enc_address, 
+                hashed_pw, otp, otp_expires_at
+            )
+        )
+        
+        if not send_otp_email(email, otp):
             return jsonify({
-                'success': True, 
-                'email': email, 
-                'message': 'Registration started. Check email for OTP.'
-            })
+                'success': False, 
+                'message': 'Registration failed - email error'
+            }), 500
             
+        return jsonify({
+            'success': True, 
+            'email': email, 
+            'message': 'Registration started. Check email for OTP.'
+        })
+        
     except psycopg2.errors.UniqueViolation:
+        conn.rollback()
         return jsonify({
             'success': False, 
             'message': 'Email or Voter ID already exists'
         }), 409
     except Exception as e:
+        conn.rollback()
         logger.error(f'Registration error: {e}')
         return jsonify({
             'success': False, 
             'message': 'Registration failed'
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/verify-otp', methods=['POST'])
 def verify_otp():
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json() if request.is_json else request.form
-        email = data.get('email')
-        otp = data.get('otp')
-        
-        if not email or not otp:
-            return jsonify({'success': False, 'message': 'Email and OTP required'}), 400
+    data = request.get_json() if request.is_json else request.form
+    email = data.get('email')
+    otp = data.get('otp')
+    
+    if not email or not otp:
+        return jsonify({'success': False, 'message': 'Email and OTP required'}), 400
 
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, otp_code, otp_expires_at, otp_verified 
-                FROM pending_registrations 
-                WHERE email=%s
-                """,
-                (email,)
-            )
-            row = cur.fetchone()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, otp_code, otp_expires_at, otp_verified 
+            FROM pending_registrations 
+            WHERE email=%s
+            """,
+            (email,)
+        )
+        row = cur.fetchone()
+        
+        if not row:
+            return jsonify({'success': False, 'message': 'No pending registration'}), 404
             
-            if not row:
-                return jsonify({'success': False, 'message': 'No pending registration'}), 404
-                
-            if row[3]:  # OTP already verified
-                return jsonify({'success': False, 'message': 'OTP already verified'}), 400
-                
-            now_utc = datetime.now(timezone.utc)
-            otp_expires_at = row[2]
+        if row[3]:  # OTP already verified
+            return jsonify({'success': False, 'message': 'OTP already verified'}), 400
             
-            if otp_expires_at.tzinfo is None:
-                otp_expires_at = otp_expires_at.replace(tzinfo=timezone.utc)
-                
-            if now_utc > otp_expires_at:
-                return jsonify({'success': False, 'message': 'OTP expired'}), 400
-                
-            if row[1] != otp:
-                return jsonify({'success': False, 'message': 'Invalid OTP'}), 400
-                
-            cur.execute(
-                "UPDATE pending_registrations SET otp_verified=TRUE WHERE id=%s",
-                (row[0],)
-            )
+        now_utc = datetime.now(timezone.utc)
+        otp_expires_at = row[2]
+        
+        if otp_expires_at.tzinfo is None:
+            otp_expires_at = otp_expires_at.replace(tzinfo=timezone.utc)
             
-            return jsonify({
-                'success': True, 
-                'message': 'OTP verified! Awaiting manager approval.'
-            })
+        if now_utc > otp_expires_at:
+            return jsonify({'success': False, 'message': 'OTP expired'}), 400
             
+        if row[1] != otp:
+            return jsonify({'success': False, 'message': 'Invalid OTP'}), 400
+            
+        cur.execute(
+            "UPDATE pending_registrations SET otp_verified=TRUE WHERE id=%s",
+            (row[0],)
+        )
+        
+        return jsonify({
+            'success': True, 
+            'message': 'OTP verified! Awaiting manager approval.'
+        })
+        
     except Exception as e:
+        conn.rollback()
         logger.error(f'OTP verification error: {e}')
         return jsonify({
             'success': False, 
             'message': 'OTP verification failed'
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/resend-otp', methods=['POST'])
 def resend_otp():
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json() if request.is_json else request.form
-        email = data.get('email')
-        
-        if not email:
-            return jsonify({'success': False, 'message': 'Email required'}), 400
+    data = request.get_json() if request.is_json else request.form
+    email = data.get('email')
+    
+    if not email:
+        return jsonify({'success': False, 'message': 'Email required'}), 400
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM pending_registrations WHERE email=%s",
-                (email,)
-            )
-            row = cur.fetchone()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM pending_registrations WHERE email=%s",
+            (email,)
+        )
+        row = cur.fetchone()
+        
+        if not row:
+            return jsonify({'success': False, 'message': 'Email not found'}), 404
             
-            if not row:
-                return jsonify({'success': False, 'message': 'Email not found'}), 404
-                
-            otp = str(random.randint(100000, 999999))
-            otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        otp = str(random.randint(100000, 999999))
+        otp_expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        
+        cur.execute(
+            """
+            UPDATE pending_registrations 
+            SET otp_code=%s, otp_expires_at=%s, otp_verified=FALSE 
+            WHERE id=%s
+            """,
+            (otp, otp_expires_at, row[0])
+        )
+        
+        if not send_otp_email(email, otp):
+            return jsonify({'success': False, 'message': 'Failed to resend OTP'}), 500
             
-            cur.execute(
-                """
-                UPDATE pending_registrations 
-                SET otp_code=%s, otp_expires_at=%s, otp_verified=FALSE 
-                WHERE id=%s
-                """,
-                (otp, otp_expires_at, row[0])
-            )
-            
-            if not send_otp_email(email, otp):
-                return jsonify({'success': False, 'message': 'Failed to resend OTP'}), 500
-                
-            return jsonify({
-                'success': True, 
-                'message': 'OTP resent to your email.'
-            })
-            
+        return jsonify({
+            'success': True, 
+            'message': 'OTP resent to your email.'
+        })
+        
     except Exception as e:
+        conn.rollback()
         logger.error(f'Resend OTP error: {e}')
         return jsonify({
             'success': False, 
             'message': 'Failed to resend OTP'
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/manager/pending-users', methods=['GET'])
 def pending_users():
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
 
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, full_name, email, phone, dob, gender, voter_id, address 
-                FROM pending_registrations
-                WHERE otp_verified=TRUE
-                """
-            )
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, full_name, email, phone, dob, gender, voter_id, address 
+            FROM pending_registrations
+            WHERE otp_verified=TRUE
+            """
+        )
+        
+        users = []
+        for row in cur.fetchall():
+            users.append({
+                'id': row[0],
+                'full_name': row[1],
+                'email': row[2],
+                'phone': aes_decrypt(row[3]) if row[3] else "",
+                'dob': row[4].isoformat() if row[4] else "",
+                'gender': row[5],
+                'voter_id': row[6],
+                'address': aes_decrypt(row[7]) if row[7] else ""
+            })
             
-            users = []
-            for row in cur.fetchall():
-                users.append({
-                    'id': row[0],
-                    'full_name': row[1],
-                    'email': row[2],
-                    'phone': aes_decrypt(row[3]) if row[3] else "",
-                    'dob': row[4].isoformat() if row[4] else "",
-                    'gender': row[5],
-                    'voter_id': row[6],
-                    'address': aes_decrypt(row[7]) if row[7] else ""
-                })
-                
-            return jsonify({'success': True, 'users': users})
-            
+        return jsonify({'success': True, 'users': users})
+        
     except Exception as e:
         logger.error(f"Error fetching pending users: {e}")
         return jsonify({
@@ -486,152 +461,151 @@ def pending_users():
             'message': 'Error fetching users'
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/manager/approve-user', methods=['POST'])
 def approve_user():
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json()
-        pending_id = data.get('user_id')
-        
-        if not pending_id:
-            return jsonify({'success': False, 'message': 'User ID required'}), 400
+    data = request.get_json()
+    pending_id = data.get('user_id')
+    
+    if not pending_id:
+        return jsonify({'success': False, 'message': 'User ID required'}), 400
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT * FROM pending_registrations WHERE id=%s",
-                (pending_id,)
-            )
-            user = cur.fetchone()
-            
-            if not user:
-                return jsonify({
-                    'success': False, 
-                    'message': 'Pending user not found'
-                }), 404
-                
-            cur.execute(
-                """
-                INSERT INTO users 
-                (full_name, email, phone, dob, gender, voter_id, address, password_hash, registration_status)
-                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'approved')
-                """,
-                (
-                    user[1], user[2], user[3], user[4], 
-                    user[5], user[6], user[7], user[8]
-                )
-            )
-            
-            cur.execute(
-                "DELETE FROM pending_registrations WHERE id=%s",
-                (pending_id,)
-            )
-            
-            if not send_manager_email(user[2], approved=True):
-                logger.error(f"Failed to send approval email to {user[2]}")
-                
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT * FROM pending_registrations WHERE id=%s",
+            (pending_id,)
+        )
+        user = cur.fetchone()
+        
+        if not user:
             return jsonify({
-                'success': True, 
-                'message': 'User approved & moved to main table.'
-            })
+                'success': False, 
+                'message': 'Pending user not found'
+            }), 404
             
+        cur.execute(
+            """
+            INSERT INTO users 
+            (full_name, email, phone, dob, gender, voter_id, address, password_hash, registration_status)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'approved')
+            """,
+            (
+                user[1], user[2], user[3], user[4], 
+                user[5], user[6], user[7], user[8]
+            )
+        )
+        
+        cur.execute(
+            "DELETE FROM pending_registrations WHERE id=%s",
+            (pending_id,)
+        )
+        
+        if not send_manager_email(user[2], approved=True):
+            logger.error(f"Failed to send approval email to {user[2]}")
+            
+        return jsonify({
+            'success': True, 
+            'message': 'User approved & moved to main table.'
+        })
+        
     except Exception as e:
+        conn.rollback()
         logger.error(f"Error approving user: {e}")
         return jsonify({
             'success': False, 
             'message': 'Error approving user'
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/manager/reject-user', methods=['POST'])
 def reject_user():
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json()
-        pending_id = data.get('user_id')
-        
-        if not pending_id:
-            return jsonify({'success': False, 'message': 'User ID required'}), 400
+    data = request.get_json()
+    pending_id = data.get('user_id')
+    
+    if not pending_id:
+        return jsonify({'success': False, 'message': 'User ID required'}), 400
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT email FROM pending_registrations WHERE id=%s",
-                (pending_id,)
-            )
-            row = cur.fetchone()
-            
-            if not row:
-                return jsonify({
-                    'success': False, 
-                    'message': 'Pending user not found'
-                }), 404
-                
-            email = row[0]
-            cur.execute(
-                "DELETE FROM pending_registrations WHERE id=%s",
-                (pending_id,)
-            )
-            
-            if not send_manager_email(email, approved=False):
-                logger.error(f"Failed to send rejection email to {email}")
-                
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT email FROM pending_registrations WHERE id=%s",
+            (pending_id,)
+        )
+        row = cur.fetchone()
+        
+        if not row:
             return jsonify({
-                'success': True, 
-                'message': 'User rejected & removed.'
-            })
+                'success': False, 
+                'message': 'Pending user not found'
+            }), 404
             
+        email = row[0]
+        cur.execute(
+            "DELETE FROM pending_registrations WHERE id=%s",
+            (pending_id,)
+        )
+        
+        if not send_manager_email(email, approved=False):
+            logger.error(f"Failed to send rejection email to {email}")
+            
+        return jsonify({
+            'success': True, 
+            'message': 'User rejected & removed.'
+        })
+        
     except Exception as e:
+        conn.rollback()
         logger.error(f"Error rejecting user: {e}")
         return jsonify({
             'success': False, 
             'message': 'Error rejecting user'
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/elections', methods=['GET'])
 def get_elections():
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
 
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, title, description, start_time, end_time, is_locked, is_active, is_hidden 
-                FROM elections 
-                ORDER BY id DESC
-                """
-            )
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, title, description, start_time, end_time, is_locked, is_active, is_hidden 
+            FROM elections 
+            ORDER BY id DESC
+            """
+        )
+        
+        elections = []
+        for e in cur.fetchall():
+            elections.append({
+                "id": e[0],
+                "title": e[1],
+                "description": e[2],
+                "start_time": e[3].isoformat() if e[3] else "",
+                "end_time": e[4].isoformat() if e[4] else "",
+                "is_locked": e[5],
+                "is_active": e[6],
+                "is_hidden": e[7],
+                "candidates": get_candidates(e[0])
+            })
             
-            elections = []
-            for e in cur.fetchall():
-                elections.append({
-                    "id": e[0],
-                    "title": e[1],
-                    "description": e[2],
-                    "start_time": e[3].isoformat() if e[3] else "",
-                    "end_time": e[4].isoformat() if e[4] else "",
-                    "is_locked": e[5],
-                    "is_active": e[6],
-                    "is_hidden": e[7],
-                    "candidates": get_candidates(e[0])
-                })
-                
-            return jsonify({"success": True, "elections": elections})
-            
+        return jsonify({"success": True, "elections": elections})
+        
     except Exception as e:
         logger.error(f"Error fetching elections: {e}")
         return jsonify({
@@ -639,290 +613,182 @@ def get_elections():
             "message": "Error fetching elections"
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
-
-@app.route('/api/user/elections', methods=['GET'])
-def get_user_elections():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-        
-    try:
-        user_id = session.get('user_id')
-        if not user_id:
-            return jsonify({
-                'success': False, 
-                'message': 'Not authenticated'
-            }), 401
-            
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT e.id, e.title, e.description, e.start_time, e.end_time, 
-                       e.is_locked, e.is_active,
-                       (SELECT candidate_id FROM votes 
-                        WHERE voter_id=(SELECT voter_id FROM users WHERE id=%s) 
-                        AND election_id=e.id) as user_voted_for
-                FROM elections e
-                WHERE e.is_hidden = FALSE
-                ORDER BY e.id DESC
-                """,
-                (user_id,)
-            )
-            
-            elections = []
-            for e in cur.fetchall():
-                election = {
-                    "id": e[0],
-                    "title": e[1],
-                    "description": e[2],
-                    "start_time": e[3].isoformat() if e[3] else "",
-                    "end_time": e[4].isoformat() if e[4] else "",
-                    "is_locked": e[5],
-                    "is_active": e[6],
-                    "user_voted_for": e[7],
-                    "candidates": []
-                }
-                
-                cur.execute(
-                    """
-                    SELECT id, name, symbol, party, votes 
-                    FROM candidates 
-                    WHERE election_id=%s
-                    """,
-                    (e[0],)
-                )
-                
-                for c in cur.fetchall():
-                    election["candidates"].append({
-                        "id": c[0],
-                        "name": c[1],
-                        "symbol": c[2],
-                        "party": c[3],
-                        "votes": c[4]
-                    })
-                    
-                elections.append(election)
-                
-            return jsonify({'success': True, 'elections': elections})
-            
-    except Exception as e:
-        logger.error(f"Error fetching elections: {e}")
-        return jsonify({
-            'success': False, 
-            'message': 'Error fetching elections'
-        }), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/elections', methods=['POST'])
 def create_election():
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json()
-        title = data.get("title")
-        desc = data.get("description", "")
-        start_time = data.get("start_time")
-        end_time = data.get("end_time")
-        
-        if not title:
-            return jsonify({"success": False, "message": "Title required"}), 400
+    data = request.get_json()
+    title = data.get("title")
+    desc = data.get("description", "")
+    start_time = data.get("start_time")
+    end_time = data.get("end_time")
+    
+    if not title:
+        return jsonify({"success": False, "message": "Title required"}), 400
 
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO elections (title, description, start_time, end_time) 
-                VALUES (%s, %s, %s, %s)
-                """,
-                (title, desc, start_time, end_time)
-            )
-            return jsonify({"success": True})
-            
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO elections (title, description, start_time, end_time) 
+            VALUES (%s, %s, %s, %s)
+            """,
+            (title, desc, start_time, end_time)
+        )
+        return jsonify({"success": True})
     except Exception as e:
+        conn.rollback()
         logger.error(f"Create election error: {e}")
         return jsonify({
             "success": False, 
             "message": "Could not create election"
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/candidates', methods=['POST'])
 def add_candidate(election_id):
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json()
-        name = data.get("name")
-        symbol = data.get("symbol", "")
-        party = data.get("party", "")
-        
-        if not name:
-            return jsonify({"success": False, "message": "Name required"}), 400
+    data = request.get_json()
+    name = data.get("name")
+    symbol = data.get("symbol", "")
+    party = data.get("party", "")
+    
+    if not name:
+        return jsonify({"success": False, "message": "Name required"}), 400
 
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO candidates (election_id, name, symbol, party) 
-                VALUES (%s, %s, %s, %s)
-                """,
-                (election_id, name, symbol, party)
-            )
-            return jsonify({"success": True})
-            
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO candidates (election_id, name, symbol, party) 
+            VALUES (%s, %s, %s, %s)
+            """,
+            (election_id, name, symbol, party)
+        )
+        return jsonify({"success": True})
     except Exception as e:
+        conn.rollback()
         logger.error(f"Add candidate error: {e}")
         return jsonify({
             "success": False, 
             "message": "Could not add candidate"
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/lock', methods=['POST'])
 def lock_election(election_id):
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json()
-        lock = data.get("lock", True)
+    data = request.get_json()
+    lock = data.get("lock", True)
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE elections SET is_locked=%s WHERE id=%s",
-                (lock, election_id)
-            )
-            return jsonify({"success": True})
-            
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE elections SET is_locked=%s WHERE id=%s",
+            (lock, election_id)
+        )
+        return jsonify({"success": True})
     except Exception as e:
+        conn.rollback()
         logger.error(f"Lock/unlock error: {e}")
         return jsonify({
             "success": False, 
             "message": "Could not update lock state"
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/activate', methods=['POST'])
 def activate_election(election_id):
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json()
-        active = data.get("active", True)
+    data = request.get_json()
+    active = data.get("active", True)
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE elections SET is_active=%s WHERE id=%s",
-                (active, election_id)
-            )
-            return jsonify({"success": True})
-            
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE elections SET is_active=%s WHERE id=%s",
+            (active, election_id)
+        )
+        return jsonify({"success": True})
     except Exception as e:
+        conn.rollback()
         logger.error(f"Activate error: {e}")
         return jsonify({
             "success": False, 
             "message": "Could not update active state"
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/reset', methods=['POST'])
 def reset_election(election_id):
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
 
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "DELETE FROM candidates WHERE election_id=%s",
-                (election_id,)
-            )
-            return jsonify({"success": True})
-            
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM candidates WHERE election_id=%s",
+            (election_id,)
+        )
+        return jsonify({"success": True})
     except Exception as e:
+        conn.rollback()
         logger.error(f"Reset error: {e}")
         return jsonify({
             "success": False, 
             "message": "Could not reset election"
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/elections/<int:election_id>/modify', methods=['POST'])
 def modify_election(election_id):
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json()
-        start_time = data.get("start_time")
-        end_time = data.get("end_time")
-        
-        if not start_time or not end_time:
-            return jsonify({"success": False, "message": "Start and end time required"}), 400
+    data = request.get_json()
+    start_time = data.get("start_time")
+    end_time = data.get("end_time")
+    
+    if not start_time or not end_time:
+        return jsonify({"success": False, "message": "Start and end time required"}), 400
 
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE elections SET start_time=%s, end_time=%s WHERE id=%s",
-                (start_time, end_time, election_id)
-            )
-            return jsonify({"success": True})
-            
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE elections SET start_time=%s, end_time=%s WHERE id=%s",
+            (start_time, end_time, election_id)
+        )
+        return jsonify({"success": True})
     except Exception as e:
+        conn.rollback()
         logger.error(f"Modify time error: {e}")
         return jsonify({
             "success": False, 
             "message": "Could not modify election time"
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
-
-@app.route('/api/elections/<int:election_id>/hide', methods=['POST'])
-def hide_election(election_id):
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-        
-    try:
-        data = request.get_json()
-        hide = data.get("hide", True)
-
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE elections SET is_hidden=%s WHERE id=%s",
-                (hide, election_id)
-            )
-            return jsonify({"success": True})
-            
-    except Exception as e:
-        logger.error(f"Hide/unhide error: {e}")
-        return jsonify({
-            "success": False, 
-            "message": "Could not update hide state"
-        }), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
 
 @app.route('/api/login', methods=['POST', 'OPTIONS'])
 def login():
@@ -934,57 +800,55 @@ def login():
         response.headers.add('Access-Control-Allow-Credentials', 'true')
         return response
         
-    conn = get_db_connection()
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
         
-    try:
-        data = request.get_json()
-        email = data.get('email')
-        password = data.get('password')
-        
-        if not email or not password:
-            return jsonify({'success': False, 'message': 'Email and password required'}), 400
+    data = request.get_json()
+    email = data.get('email')
+    password = data.get('password')
+    
+    if not email or not password:
+        return jsonify({'success': False, 'message': 'Email and password required'}), 400
 
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, password_hash, registration_status 
-                FROM users 
-                WHERE email=%s
-                """,
-                (email,)
-            )
-            user = cur.fetchone()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id, password_hash, registration_status 
+            FROM users 
+            WHERE email=%s
+            """,
+            (email,)
+        )
+        user = cur.fetchone()
+        
+        if not user:
+            return jsonify({
+                'success': False, 
+                'message': 'No account found with this email'
+            }), 401
             
-            if not user:
-                return jsonify({
-                    'success': False, 
-                    'message': 'No account found with this email'
-                }), 401
-                
-            if user[2] != 'approved':
-                return jsonify({
-                    'success': False, 
-                    'message': 'Your registration is not approved yet'
-                }), 403
-                
-            if not check_password_hash(user[1], password):
-                return jsonify({
-                    'success': False, 
-                    'message': 'Email / Password Incorrect'
-                }), 401
-                
-            session['user_id'] = user[0]
-            response = jsonify({
-                'success': True, 
-                'message': 'Login successful!',
-                'user_id': user[0]
-            })
-            response.headers.add('Access-Control-Allow-Origin', 'http://127.0.0.1:5500')
-            response.headers.add('Access-Control-Allow-Credentials', 'true')
-            return response
+        if user[2] != 'approved':
+            return jsonify({
+                'success': False, 
+                'message': 'Your registration is not approved yet'
+            }), 403
             
+        if not check_password_hash(user[1], password):
+            return jsonify({
+                'success': False, 
+                'message': 'Incorrect password'
+            }), 401
+            
+        session['user_id'] = user[0]
+        response = jsonify({
+            'success': True, 
+            'message': 'Login successful!',
+            'user_id': user[0]
+        })
+        response.headers.add('Access-Control-Allow-Origin', 'http://127.0.0.1:5500')
+        response.headers.add('Access-Control-Allow-Credentials', 'true')
+        return response
     except Exception as e:
         logger.error(f"Login error: {e}")
         return jsonify({
@@ -992,8 +856,266 @@ def login():
             'message': 'Login failed'
         }), 500
     finally:
-        if 'conn' in locals():
-            conn.close()
+        if 'cur' in locals():
+            cur.close()
+
+@app.route('/api/user/elections', methods=['GET'])
+def get_user_elections():
+    if not conn:
+        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
+        
+    try:
+        user_id = session.get('user_id')
+        if not user_id:
+            return jsonify({
+                'success': False, 
+                'message': 'Not authenticated'
+            }), 401
+            
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT e.id, e.title, e.description, e.start_time, e.end_time, 
+                   e.is_locked, e.is_active,
+                   (SELECT candidate_id FROM votes 
+                    WHERE voter_id=(SELECT voter_id FROM users WHERE id=%s) 
+                    AND election_id=e.id) as user_voted_for
+            FROM elections e
+            WHERE e.is_hidden = FALSE
+            ORDER BY e.id DESC
+            """,
+            (user_id,)
+        )
+        
+        elections = []
+        for e in cur.fetchall():
+            election = {
+                "id": e[0],
+                "title": e[1],
+                "description": e[2],
+                "start_time": e[3].isoformat() if e[3] else "",
+                "end_time": e[4].isoformat() if e[4] else "",
+                "is_locked": e[5],
+                "is_active": e[6],
+                "user_voted_for": e[7],
+                "candidates": []
+            }
+            
+            cur.execute(
+                """
+                SELECT id, name, symbol, party, votes 
+                FROM candidates 
+                WHERE election_id=%s
+                """,
+                (e[0],)
+            )
+            
+            for c in cur.fetchall():
+                election["candidates"].append({
+                    "id": c[0],
+                    "name": c[1],
+                    "symbol": c[2],
+                    "party": c[3],
+                    "votes": c[4]
+                })
+                
+            elections.append(election)
+            
+        return jsonify({'success': True, 'elections': elections})
+    except Exception as e:
+        logger.error(f"Error fetching elections: {e}")
+        return jsonify({
+            'success': False, 
+            'message': 'Error fetching elections'
+        }), 500
+    finally:
+        if 'cur' in locals():
+            cur.close()
+
+@app.route('/api/profile', methods=['GET'])
+def get_profile():
+    if not conn:
+        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
+        
+    try:
+        user_id = session.get('user_id')
+        if not user_id:
+            return jsonify({
+                'success': False, 
+                'message': 'Not authenticated'
+            }), 401
+            
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT full_name, email, voter_id, address, phone 
+            FROM users 
+            WHERE id=%s
+            """,
+            (user_id,)
+        )
+        user = cur.fetchone()
+        
+        if not user:
+            return jsonify({
+                'success': False, 
+                'message': 'User not found'
+            }), 404
+            
+        return jsonify({
+            'success': True,
+            'full_name': user[0],
+            'email': user[1],
+            'voter_id': user[2],
+            'address': aes_decrypt(user[3]) if user[3] else "",
+            'phone': aes_decrypt(user[4]) if user[4] else ""
+        })
+    except Exception as e:
+        logger.error(f"Error fetching profile: {e}")
+        return jsonify({
+            'success': False, 
+            'message': 'Error fetching profile'
+        }), 500
+    finally:
+        if 'cur' in locals():
+            cur.close()
+
+@app.route('/api/vote', methods=['POST'])
+def submit_vote():
+    if not conn:
+        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
+        
+    try:
+        user_id = session.get('user_id')
+        if not user_id:
+            return jsonify({
+                'success': False, 
+                'message': 'Not authenticated'
+            }), 401
+            
+        data = request.get_json()
+        election_id = data.get('election_id')
+        candidate_id = data.get('candidate_id')
+        
+        if not election_id or not candidate_id:
+            return jsonify({
+                'success': False, 
+                'message': 'Missing parameters'
+            }), 400
+            
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT 1 FROM votes 
+            WHERE voter_id=(SELECT voter_id FROM users WHERE id=%s) 
+            AND election_id=%s
+            """,
+            (user_id, election_id)
+        )
+        
+        if cur.fetchone():
+            return jsonify({
+                'success': False, 
+                'message': 'Already voted in this election'
+            }), 400
+            
+        cur.execute(
+            """
+            INSERT INTO votes (election_id, candidate_id, voter_id)
+            VALUES (%s, %s, (SELECT voter_id FROM users WHERE id=%s))
+            """,
+            (election_id, candidate_id, user_id)
+        )
+        
+        cur.execute(
+            """
+            UPDATE candidates 
+            SET votes = votes + 1 
+            WHERE id=%s AND election_id=%s
+            """,
+            (candidate_id, election_id)
+        )
+        
+        return jsonify({
+            'success': True, 
+            'message': 'Vote recorded successfully'
+        })
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Error submitting vote: {e}")
+        return jsonify({
+            'success': False, 
+            'message': 'Error submitting vote'
+        }), 500
+    finally:
+        if 'cur' in locals():
+            cur.close()
+
+@app.route('/api/voting-stats', methods=['GET'])
+def get_voting_stats():
+    if not conn:
+        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM users WHERE registration_status='approved'"
+        )
+        total_voters = cur.fetchone()[0]
+        
+        cur.execute(
+            "SELECT COUNT(DISTINCT voter_id) FROM votes"
+        )
+        voted_count = cur.fetchone()[0]
+        
+        return jsonify({
+            'success': True,
+            'total_voters': total_voters,
+            'voted_count': voted_count
+        })
+    except Exception as e:
+        logger.error(f"Error fetching voting stats: {e}")
+        return jsonify({
+            'success': False, 
+            'message': 'Error fetching stats'
+        }), 500
+    finally:
+        if 'cur' in locals():
+            cur.close()
+
+@app.route('/api/elections/<int:election_id>/hide', methods=['POST'])
+def hide_election(election_id):
+    if not conn:
+        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
+        
+    data = request.get_json()
+    hide = data.get("hide", True)
+
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE elections SET is_hidden=%s WHERE id=%s",
+            (hide, election_id)
+        )
+        return jsonify({"success": True})
+    except Exception as e:
+        conn.rollback()
+        logger.error(f"Hide/unhide error: {e}")
+        return jsonify({
+            "success": False, 
+            "message": "Could not update hide state"
+        }), 500
+    finally:
+        if 'cur' in locals():
+            cur.close()
+
+@app.route('/api/logout', methods=['POST'])
+def logout():
+    session.pop('user_id', None)
+    return jsonify({
+        'success': True, 
+        'message': 'Logged out successfully'
+    })
 
 @app.route('/api/forgot-password', methods=['POST'])
 def forgot_password():
@@ -1173,170 +1295,6 @@ def reset_password():
     finally:
         if 'conn' in locals():
             conn.close()
-
-@app.route('/api/profile', methods=['GET'])
-def get_profile():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-        
-    try:
-        user_id = session.get('user_id')
-        if not user_id:
-            return jsonify({
-                'success': False, 
-                'message': 'Not authenticated'
-            }), 401
-            
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT full_name, email, voter_id, address, phone 
-                FROM users 
-                WHERE id=%s
-                """,
-                (user_id,)
-            )
-            user = cur.fetchone()
-            
-            if not user:
-                return jsonify({
-                    'success': False, 
-                    'message': 'User not found'
-                }), 404
-                
-            return jsonify({
-                'success': True,
-                'full_name': user[0],
-                'email': user[1],
-                'voter_id': user[2],
-                'address': aes_decrypt(user[3]) if user[3] else "",
-                'phone': aes_decrypt(user[4]) if user[4] else ""
-            })
-            
-    except Exception as e:
-        logger.error(f"Error fetching profile: {e}")
-        return jsonify({
-            'success': False, 
-            'message': 'Error fetching profile'
-        }), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-@app.route('/api/vote', methods=['POST'])
-def submit_vote():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-        
-    try:
-        user_id = session.get('user_id')
-        if not user_id:
-            return jsonify({
-                'success': False, 
-                'message': 'Not authenticated'
-            }), 401
-            
-        data = request.get_json()
-        election_id = data.get('election_id')
-        candidate_id = data.get('candidate_id')
-        
-        if not election_id or not candidate_id:
-            return jsonify({
-                'success': False, 
-                'message': 'Missing parameters'
-            }), 400
-            
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT 1 FROM votes 
-                WHERE voter_id=(SELECT voter_id FROM users WHERE id=%s) 
-                AND election_id=%s
-                """,
-                (user_id, election_id)
-            )
-            
-            if cur.fetchone():
-                return jsonify({
-                    'success': False, 
-                    'message': 'Already voted in this election'
-                }), 400
-                
-            cur.execute(
-                """
-                INSERT INTO votes (election_id, candidate_id, voter_id)
-                VALUES (%s, %s, (SELECT voter_id FROM users WHERE id=%s))
-                """,
-                (election_id, candidate_id, user_id)
-            )
-            
-            cur.execute(
-                """
-                UPDATE candidates 
-                SET votes = votes + 1 
-                WHERE id=%s AND election_id=%s
-                """,
-                (candidate_id, election_id)
-            )
-            
-            return jsonify({
-                'success': True, 
-                'message': 'Vote recorded successfully'
-            })
-            
-    except Exception as e:
-        logger.error(f"Error submitting vote: {e}")
-        return jsonify({
-            'success': False, 
-            'message': 'Error submitting vote'
-        }), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-@app.route('/api/voting-stats', methods=['GET'])
-def get_voting_stats():
-    conn = get_db_connection()
-    if not conn:
-        return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT COUNT(*) FROM users WHERE registration_status='approved'"
-            )
-            total_voters = cur.fetchone()[0]
-            
-            cur.execute(
-                "SELECT COUNT(DISTINCT voter_id) FROM votes"
-            )
-            voted_count = cur.fetchone()[0]
-            
-            return jsonify({
-                'success': True,
-                'total_voters': total_voters,
-                'voted_count': voted_count
-            })
-            
-    except Exception as e:
-        logger.error(f"Error fetching voting stats: {e}")
-        return jsonify({
-            'success': False, 
-            'message': 'Error fetching stats'
-        }), 500
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-@app.route('/api/logout', methods=['POST'])
-def logout():
-    session.pop('user_id', None)
-    return jsonify({
-        'success': True, 
-        'message': 'Logged out successfully'
-    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
