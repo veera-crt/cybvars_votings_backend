@@ -1,4 +1,3 @@
-
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -22,14 +21,17 @@ from psycopg2 import sql
 app = Flask(__name__)
 app.secret_key = os.environ["SECRET_KEY"]
 
+# --- START OF FIX ---
+# Configure session cookie for cross-site requests
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'
+app.config['SESSION_COOKIE_SECURE'] = True
+# --- END OF FIX ---
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # CORS Configuration
-# In your Flask app initialization
-
-
 CORS(app, supports_credentials=True, resources={
     r"/api/*": {
         "origins": [
@@ -45,7 +47,6 @@ CORS(app, supports_credentials=True, resources={
         "expose_headers": ["Content-Type"]
     }
 })
-
 
 # Constants
 AES_KEY = os.environ.get("AES_KEY")[:32].encode()
@@ -101,7 +102,6 @@ def aes_decrypt(enc_b64):
         return None
 
 # Email Services
-# Updated email function with better debugging
 def send_email(to_email, subject, content):
     try:
         msg = EmailMessage()
@@ -109,8 +109,6 @@ def send_email(to_email, subject, content):
         msg['Subject'] = subject
         msg['From'] = EMAIL_USER
         msg['To'] = to_email
-
-        # Try both SSL and STARTTLS methods
         try:
             with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as server:
                 server.login(EMAIL_USER, EMAIL_PASS)
@@ -120,7 +118,6 @@ def send_email(to_email, subject, content):
                 server.starttls()
                 server.login(EMAIL_USER, EMAIL_PASS)
                 server.send_message(msg)
-                
         return True
     except Exception as e:
         logger.error(f"Email failed: {e}\nUsername: {EMAIL_USER}\nPassword: {'*'*len(EMAIL_PASS)}")
@@ -134,6 +131,7 @@ def test_db_connection():
         print("Database connection successful")
     except Exception as e:
         print(f"Database connection failed: {e}")
+
 def send_otp_email(to_email, otp):
     content = f"Your CybVars Voting OTP is: {otp}"
     return send_email(to_email, 'CybVars Voting - Email Verification OTP', content)
@@ -174,6 +172,7 @@ def get_candidates(election_id):
         cur.close()
 
 # API Routes
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     try:
@@ -222,7 +221,6 @@ def register():
         
     if data['password'] != data['confirm_password']:
         return jsonify({'success': False, 'message': 'Passwords do not match'}), 400
-
     try:
         hashed_pw = generate_password_hash(data['password'])
         enc_address = aes_encrypt(data['address'])
@@ -323,7 +321,6 @@ def verify_otp():
     
     if not email or not otp:
         return jsonify({'success': False, 'message': 'Email and OTP required'}), 400
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -385,7 +382,6 @@ def resend_otp():
     
     if not email:
         return jsonify({'success': False, 'message': 'Email required'}), 400
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -432,7 +428,6 @@ def resend_otp():
 def pending_users():
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -478,7 +473,6 @@ def approve_user():
     
     if not pending_id:
         return jsonify({'success': False, 'message': 'User ID required'}), 400
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -539,7 +533,6 @@ def reject_user():
     
     if not pending_id:
         return jsonify({'success': False, 'message': 'User ID required'}), 400
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -583,7 +576,6 @@ def reject_user():
 def get_elections():
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -633,7 +625,6 @@ def create_election():
     
     if not title:
         return jsonify({"success": False, "message": "Title required"}), 400
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -667,7 +658,6 @@ def add_candidate(election_id):
     
     if not name:
         return jsonify({"success": False, "message": "Name required"}), 400
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -696,7 +686,6 @@ def lock_election(election_id):
         
     data = request.get_json()
     lock = data.get("lock", True)
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -722,7 +711,6 @@ def activate_election(election_id):
         
     data = request.get_json()
     active = data.get("active", True)
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -745,7 +733,6 @@ def activate_election(election_id):
 def reset_election(election_id):
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -775,7 +762,6 @@ def modify_election(election_id):
     
     if not start_time or not end_time:
         return jsonify({"success": False, "message": "Start and end time required"}), 400
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -798,7 +784,6 @@ def modify_election(election_id):
 def login():
     allowed_origins = ['http://127.0.0.1:5500', 'https://veera-crt.github.io']
     origin = request.headers.get('Origin')
-
     if request.method == 'OPTIONS':
         response = jsonify({'success': True})
         if origin in allowed_origins:
@@ -807,17 +792,13 @@ def login():
             response.headers.add('Access-Control-Allow-Methods', 'POST')
             response.headers.add('Access-Control-Allow-Credentials', 'true')
         return response
-
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-
     data = request.get_json()
     email = data.get('email')
     password = data.get('password')
-
     if not email or not password:
         return jsonify({'success': False, 'message': 'Email and password required'}), 400
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -829,25 +810,21 @@ def login():
             (email,)
         )
         user = cur.fetchone()
-
         if not user:
             return jsonify({
                 'success': False, 
                 'message': 'No account found with this email'
             }), 401
-
         if user[2] != 'approved':
             return jsonify({
                 'success': False, 
                 'message': 'Your registration is not approved yet'
             }), 403
-
         if not check_password_hash(user[1], password):
             return jsonify({
                 'success': False, 
                 'message': 'Incorrect password'
             }), 401
-
         session['user_id'] = user[0]
         response = jsonify({
             'success': True, 
@@ -1064,7 +1041,6 @@ def submit_vote():
 def get_voting_stats():
     if not conn:
         return jsonify({'success': False, 'message': 'Database connection failed'}), 500
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -1099,7 +1075,6 @@ def hide_election(election_id):
         
     data = request.get_json()
     hide = data.get("hide", True)
-
     try:
         cur = conn.cursor()
         cur.execute(
@@ -1139,7 +1114,6 @@ def forgot_password():
         
         if not email or not voter_id:
             return jsonify({'success': False, 'message': 'Email and Voter ID required'}), 400
-
         with conn.cursor() as cur:
             # Verify email and voter_id match
             cur.execute(
@@ -1204,7 +1178,6 @@ def verify_reset_otp():
         
         if not email or not otp:
             return jsonify({'success': False, 'message': 'Email and OTP required'}), 400
-
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -1271,7 +1244,6 @@ def reset_password():
             
         if new_password != confirm_password:
             return jsonify({'success': False, 'message': 'Passwords do not match'}), 400
-
         with conn.cursor() as cur:
             # Verify email exists (additional security check)
             cur.execute(
